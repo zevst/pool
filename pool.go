@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 )
 
 type Callback interface {
@@ -68,6 +69,8 @@ func (p *Pool) Stop() {
 
 func (p *Pool) Work() error {
 	defer Close(p)
+	wg := &sync.WaitGroup{}
+	defer wg.Wait()
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -75,12 +78,14 @@ func (p *Pool) Work() error {
 		case err := <-p.getError():
 			return p.ErrHandler(err)
 		case job := <-p.getJob():
-			go func() {
+			wg.Add(1)
+			go func(g *sync.WaitGroup) {
+				defer g.Done()
 				if err := job.Worker(p.ctx); err != nil {
 					p.setError(err)
 					p.Add(job)
 				}
-			}()
+			}(wg)
 		}
 	}
 }
