@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 )
 
@@ -19,7 +20,7 @@ type Pool struct {
 	ctx    context.Context
 	stoper context.CancelFunc
 
-	ch  chan Callback
+	job chan Callback
 	err chan error
 
 	ErrHandler ErrorHandler
@@ -36,7 +37,7 @@ func New(ctx context.Context, capacity uint64, options ...Option) *Pool {
 	pool := &Pool{
 		ctx:        ctx,
 		stoper:     cancel,
-		ch:         make(chan Callback, capacity),
+		job:        make(chan Callback, capacity),
 		err:        make(chan error, capacity),
 		ErrHandler: stdErrorHandler,
 	}
@@ -54,11 +55,11 @@ func AddLogger(writer io.Writer) Option {
 }
 
 func (p *Pool) Add(f Callback) {
-	p.ch <- f
+	p.job <- f
 }
 
 func (p *Pool) Close() error {
-	close(p.ch)
+	close(p.job)
 	close(p.err)
 	return nil
 }
@@ -75,29 +76,18 @@ func (p *Pool) Work() error {
 		select {
 		case <-p.ctx.Done():
 			return p.ctx.Err()
-		case err := <-p.getError():
+		case err := <-p.err:
 			return p.ErrHandler(err)
-		case job := <-p.getJob():
+		case job := <-p.job:
 			wg.Add(1)
 			go func(g *sync.WaitGroup) {
+				runtime.Gosched()
 				defer g.Done()
 				if err := job.Worker(p.ctx); err != nil {
-					p.setError(err)
+					p.err <- err
 					p.Add(job)
 				}
 			}(wg)
 		}
 	}
-}
-
-func (p *Pool) getJob() <-chan Callback {
-	return p.ch
-}
-
-func (p *Pool) getError() <-chan error {
-	return p.err
-}
-
-func (p *Pool) setError(err error) {
-	p.err <- err
 }
