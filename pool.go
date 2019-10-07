@@ -23,6 +23,7 @@ type Pool struct {
 	job chan Callback
 	err chan error
 
+	cyclic     bool
 	ErrHandler ErrorHandler
 }
 
@@ -45,6 +46,13 @@ func New(ctx context.Context, capacity uint64, options ...Option) *Pool {
 		exec(pool)
 	}
 	return pool
+}
+
+//Cyclic job returns to pool after work and error handling
+func Cyclic() Option {
+	return func(p *Pool) {
+		p.cyclic = true
+	}
 }
 
 // AddLogger replaces the logging source
@@ -80,14 +88,18 @@ func (p *Pool) Work() error {
 			return p.ErrHandler(err)
 		case job := <-p.job:
 			wg.Add(1)
-			go func(g *sync.WaitGroup) {
-				runtime.Gosched()
-				defer g.Done()
-				if err := job.Worker(p.ctx); err != nil {
-					p.err <- err
-					p.Add(job)
-				}
-			}(wg)
+			go p.process(wg, job)
 		}
+	}
+}
+
+func (p *Pool) process(wg *sync.WaitGroup, job Callback) {
+	runtime.Gosched()
+	defer wg.Done()
+	if err := job.Worker(p.ctx); err != nil {
+		p.err <- err
+	}
+	if p.cyclic {
+		p.Add(job)
 	}
 }
