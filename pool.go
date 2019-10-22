@@ -63,14 +63,11 @@ func (p *Pool) Add(f Callback) {
 	p.job <- f
 }
 
-func (p *Pool) Close() error {
-	close(p.job)
-	close(p.err)
-	return nil
-}
-
 func (p *Pool) Work() error {
-	defer Close(p)
+	defer func() {
+		close(p.job)
+		close(p.err)
+	}()
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
 	for {
